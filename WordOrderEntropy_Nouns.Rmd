@@ -1,0 +1,332 @@
+---
+title: "WordOrderEntropy_Nouns"
+output: html_document
+date: "2024-04-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Measuring Word Order Entropy for all 18 Languages
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#loading multicastR package
+library(multicastR)
+
+#loading data.table (like tidyverse but faster)
+library(data.table)
+
+#get all corpus data
+mc <- multicast()
+mc <- as.data.table(mc)
+```
+
+#### Algorithm to Add Clause ID Column to MC Data* 
+
+```{r results='hide'}
+# 1. add row indices to the table (for sorting)
+mc[, I := .I]
+
+# 2. create a subset containing only clause boundary markers (<##>, <#>, <%>)
+y <- mc[grepl("^[#%]", graid), c("I", "graid"), with = FALSE]
+
+# 3. create an empty stack on which to 'place' embedded clauses
+stack <- c()
+clauseNumber <- 0
+prevBoundary <- 0  # To store the index of the previous boundary marker (if not finished embedded clause)
+
+# 4. initialize a progress bar as a visual aid (this algorithm is a bit slow,
+#    let us know if you manage to optimize it a bit...)
+progress <- txtProgressBar(min = 0, max = nrow(y), initial = 0,
+                           char = "|", width = 80, style = 3)
+
+# 5. loop through all clause boundaries, adding or removing them from the stack
+#    depending on their level of embeddedness, and indexing them along the way
+for (i in 1:nrow(y)) {
+  
+  next_boundary <- i + 1
+  
+  if(grepl("##", y[i, graid])) {
+    clauseNumber <- clauseNumber + 1
+    stack <- c(clauseNumber)
+    prevBoundary <- clauseNumber
+    y[i, cID := stack[1]]
+  }
+  else if(grepl("#", y[i, graid])) {
+    clauseNumber <- clauseNumber + 1
+    stack <- c(clauseNumber, stack)
+    y[i, cID := stack[1]]
+    #if next clause boundary not %, update prevBoundary to clauseNumber
+    if (!grepl("%", y[next_boundary, graid])) {
+      prevBoundary <- clauseNumber
+    }
+  }
+  else if(grepl("%", y[i, graid])) {
+    y[i, cID := prevBoundary]
+  }
+  else {
+    y[i, cID := stack[1]]
+  }
+  
+  setTxtProgressBar(progress, i)
+}
+
+# 6. merge the clause indices back into the annotation table
+mc <- merge(mc, y[, c(1, 3)], by = "I", all = TRUE)
+setorder(mc, I)
+
+# 7. copy over the clause indices to all rows in each clause
+#    (currently they're only on the clause boundary markers);
+#    this also makes clause indices unique *within* each corpus
+#    of a corpus (i.e. each corpus starts with clause index 1)
+
+mc <- merge(mc,
+            mc[!is.na(cID), .(min_cID = min(cID)), by = "corpus"],
+            by = "corpus",
+            all = TRUE)
+mc[, cID := cID - min_cID + 1]
+mc$min_cID <- NULL
+setorder(mc, I)
+mc[, cID := cID[which(!is.na(cID))], by = cumsum(!is.na(cID))]
+```
+
+#### Delete Embedded Clauses, Questions and Exclamatory Sentences from MC Data
+
+```{r}
+library(dplyr)
+
+# Filter the mc dataset
+mc <- mc %>%
+  group_by(cID) %>%
+  filter(ifelse(any(grepl("##.*", graid)), 
+                min(I[grepl("##.*", graid)]) == min(I), 
+                FALSE) & !any(grepl("[?!]", gword)))
+
+mc <- ungroup(mc)
+mc <- as.data.table(mc)
+```
+
+
+#### Get Word Order Entropies (for nouns) for Each Language
+
+```{r}
+# Initialize empty lists to fill in entropies for correlogram
+entropyS_values <- list()
+entropyA_values <- list()
+entropyP_values <- list()
+  
+# Initialize empty lists to fill in entropies for 1st Plot
+entropy_values_nouns <- list()
+
+# List all languages in the corpus
+my_languages <- c("english", "persian", "arta", "bora", "cypgreek", "jinghpaw", "kalamang", "mandarin", "matukar", "nafsan", "nkurd", "sanzhi", "sumbawa", "tabasaran", "teop", "tondano", "tulil", "veraa")
+
+# Loop through every language corpus and print word order frequencies and entropies
+for (language in my_languages){
+  
+  # Get corpus of current language
+  current_language <- mc[grepl(language, corpus)]
+  print(paste("Language:", language))
+  print(paste("Number of rows in corpus:", nrow(current_language)))
+  
+  # Subset all S' that are a noun phrase
+  s <- current_language[grepl(".*np.*:s.*", graid)]
+  print(paste("Number of intransitive subjects (S):", nrow(s)))
+  
+  # Subset As that are a noun phrase
+  a <- current_language[grepl("^(?!.*\\b(appos)).*np.*:a.*", graid, perl = TRUE)]
+  print(paste("Number of transitive subjects (A):", nrow(a)))
+  
+  # Subset all Ps that are a noun phrase
+  p <- current_language[grepl("^(?!.*\\b(p2|pred|poss|=)).*np.*:p.*", graid, perl = TRUE)]
+  print(paste("Number of transitive objects (P):", nrow(p)))
+  
+  # Subset all verbs for v, vother, cop, aux or -aux and which function as a predicate
+  v <- current_language[grepl(".*(v|vother|cop|aux).*", graid) & grepl("pred.*", gfunc)]
+  print(paste("Number of Verbs (V):", nrow(v)))
+
+  # Initialize counters
+  s_v <- 0  
+  v_s <- 0
+  
+  a_v <- 0
+  v_a <- 0
+  
+  p_v <- 0
+  v_p <- 0
+  
+  # Loop through each row in subset S
+  for (i in 1:nrow(s)) {
+    
+    # Extract cID and I from the current row in subset S
+    s_cID <- s$cID[i]
+    s_I <- s$I[i]
+    
+    # Subset V for rows where cID matches the current row in subset S
+    matching_rows <- v[v$cID == s_cID, ]
+    
+    # If no matches, continue to the next row in subset S
+    if (nrow(matching_rows) == 0) {
+      next
+    }
+    
+    # If only one match, compare the I values and increment correct counter accordingly
+    if (nrow(matching_rows) == 1) {
+      v_I <- matching_rows$I
+      if (s_I > v_I) {
+        v_s <- v_s + 1
+      } else {
+        s_v <- s_v + 1
+      }
+      next
+    }
+    
+    # If multiple matches, find the closest match based on I value
+    closest_match_index <- which.min(abs(matching_rows$I - s_I))
+    closest_match <- matching_rows[closest_match_index, ]
+    
+    # Compare the I values of the closest match and increment correct counter accordingly
+    v_I <- closest_match$I
+    if (s_I > v_I) {
+      v_s <- v_s + 1
+    } else {
+      s_v <- s_v + 1
+    }
+  }
+  
+  # Loop through each row in subset A
+  for (i in 1:nrow(a)) {
+    
+    # Extract cID and I from the current row in dataset A
+    a_cID <- a$cID[i]
+    a_I <- a$I[i]
+    
+    # Subset V for rows where cID matches the current row in subset A
+    matching_rows <- v[v$cID == a_cID, ]
+    
+    # If no matches, continue to the next row
+    if (nrow(matching_rows) == 0) {
+      next
+    }
+    
+    # If only one match, compare the I values and increment correct counter accordingly
+    if (nrow(matching_rows) == 1) {
+      v_I <- matching_rows$I
+      if (a_I > v_I) {
+        v_a <- v_a + 1
+      } else {
+        a_v <- a_v + 1
+      }
+      next
+    }
+    
+    # If multiple matches, find the closest match based on I value
+    closest_match_index <- which.min(abs(matching_rows$I - a_I))
+    closest_match <- matching_rows[closest_match_index, ]
+    
+    # Compare the I values of the closest match and increment correct counter accordingly
+    a_I <- closest_match$I
+    if (a_I > v_I) {
+      v_a <- v_a + 1
+    } else {
+      a_v <- a_v + 1
+    }
+  }
+  
+  # Loop through each row in subset P
+  for (i in 1:nrow(p)) {
+    
+    # Extract cID and I from the current row in subset P
+    p_cID <- p$cID[i]
+    p_I <- p$I[i]
+    
+    # Subset V for rows where cID matches the current row in subset P
+    matching_rows <- v[v$cID == p_cID, ]
+    
+    # If no matches, continue to the next row in subset P
+    if (nrow(matching_rows) == 0) {
+      next
+    }
+    
+    # If only one match, compare the I values and increment correct counter accordingly
+    if (nrow(matching_rows) == 1) {
+      v_I <- matching_rows$I
+      if (p_I > v_I) {
+        v_p <- v_p + 1
+      } else {
+        p_v <- p_v + 1
+      }
+      next
+    }
+    
+    # If multiple matches, find the closest match based on I value
+    closest_match_index <- which.min(abs(matching_rows$I - p_I))
+    closest_match <- matching_rows[closest_match_index, ]
+    
+    # Compare the I values of the closest match and increment correct counter accordingly
+    p_I <- closest_match$I
+    if (p_I > v_I) {
+      v_p <- v_p + 1
+    } else {
+      p_v <- p_v + 1
+    }
+  }
+
+  # Print s_v and v_s frequencies for current language
+  print(paste("S-V Frequency:", s_v))
+  print(paste("V-S Frequency:", v_s))
+  
+  # Calculate proportions
+  proportion_sv <- s_v/(s_v + v_s)
+  proportion_vs <- v_s/(s_v + v_s)
+  
+  # Calculate entropy with Shannon entropy formula
+  entropy1 <- round(-(proportion_sv * (log2(proportion_sv)) + proportion_vs * (log2(proportion_vs))), digits = 4)
+  if (is.na(entropy1)){
+    entropy1 <- 0
+  }
+  print(paste("V-S/S-V Entropy:", entropy1))
+  entropyS_values <- append(entropyS_values, entropy1)
+  
+  
+  # Print a_v and v_a frequencies for current language
+  print(paste("A-V Frequency:", a_v))
+  print(paste("V-A Frequency:", v_a))
+  
+  #Calculate proportion
+  proportion_av <- a_v/(a_v + v_a)
+  proportion_va <- v_a/(a_v + v_a)
+  
+  #Calculate entropy with Shannon entropy formula
+  entropy2 <- round(-(proportion_av * (log2(proportion_av)) + proportion_va * (log2(proportion_va))), digits = 4)
+  if (is.na(entropy2)){
+    entropy2 <- 0
+  }
+  print(paste("V-A/A-V Entropy:", entropy2))
+  entropyA_values <- append(entropyA_values, entropy2)
+  
+  
+  # Print p_v and v_p frequencies for current language
+  print(paste("P-V Frequency:", p_v))
+  print(paste("V-P Frequency:", v_p))
+  
+  # Calculate proportion 
+  proportion_vp <- v_p/(p_v + v_p)
+  proportion_pv <- p_v/(p_v + v_p)
+  
+  # Calculate entropy with Shannon entropy formula
+  entropy3 <- round(-(proportion_vp * (log2(proportion_vp)) + proportion_pv * (log2(proportion_pv))), digits = 4)
+  if (is.na(entropy3)){
+    entropy3 <- 0
+  }
+  print(paste("V-P/P-V Entropy:", entropy3))
+  entropyP_values <- append(entropyP_values, entropy3)
+  
+  # Get average word order entropy
+  overall_entropy <- round((entropy1 + entropy2 + entropy3) / 3, digits = 4)
+  print(paste("Overall Entropy:", overall_entropy))
+  entropy_values_nouns <- append(entropy_values_nouns, overall_entropy)
+  cat("\n")
+}
+```

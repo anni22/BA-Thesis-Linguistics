@@ -1,0 +1,234 @@
+---
+title: "Plotting"
+output: html_document
+date: "2024-04-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r results='hide'}
+install.packages("DMwR2", dependencies=TRUE)
+install.packages("knitr", dependencies = TRUE)
+library(knitr)
+install.packages("DMwR2")
+library(DMwR2)
+```
+
+## Draw Agreement and Word Order Entropy Results
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+
+# Calculate word order entropies and agreement values
+wo_entropy <- round(((as.numeric(entropy_values_nouns) + as.numeric(entropy_values_pronouns)) / 2), digits = 4)
+agreement <- as.numeric(agreement_values)
+
+# Define the labeled points
+labeled_points <- data.frame(
+  language = c("english", "persian", "arta", "bora", "cypgreek", "jinghpaw", "kalamang", "mandarin", "matukar", "nafsan", 
+               "nkurd", "sanzhi", "sumbawa", "tabasaran", "teop", "tondano", "tulil", "veraa"),
+  agreement = agreement,
+  wo_entropy = wo_entropy
+)
+
+# Filter out the outlier 'cypgreek' for the regression line
+filtered_points <- labeled_points %>% filter(language != "cypgreek")
+
+# Create the plot
+ggplot(labeled_points, aes(x = agreement, y = wo_entropy, label = language)) +
+  geom_point(color = "blue", size = 3) + # Points
+  geom_text_repel(size = 3.5, box.padding = 0.2, point.padding = 0.2, max.overlaps = Inf) + # Labels with repulsion
+  labs(x = "Agreement Rate",
+       y = "Word Order Entropy") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    axis.line = element_line(color = "black"), # Add axis lines
+    axis.ticks = element_line(color = "black"), # Add axis ticks
+    panel.grid.major = element_blank(), # Remove major gridlines
+    panel.grid.minor = element_blank() 
+  ) + # Remove minor gridlines
+  scale_x_continuous(limits = c(0, 1)) +  # Set x-axis limits from 0 to 1
+  scale_y_continuous(limits = c(0, 1))   # Set y-axis limits from 0 to 1
+```
+
+#### Perform LOF Outlier Analysis
+
+```{r}
+# Install the dbscan package if it's not already installed
+if (!require(dbscan)) {
+  install.packages("dbscan")
+}
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(dbscan)
+
+# Calculate word order entropies and agreement values
+wo_entropy <- round(((as.numeric(entropy_values_nouns) + as.numeric(entropy_values_pronouns)) / 2), digits = 4)
+agreement <- as.numeric(agreement_values)
+
+# Define the labeled points
+labeled_points <- data.frame(
+  language = c("english", "persian", "arta", "bora", "cypgreek", "jinghpaw", "kalamang", "mandarin", "matukar", "nafsan", 
+               "nkurd", "sanzhi", "sumbawa", "tabasaran", "teop", "tondano", "tulil", "veraa"),
+  agreement = agreement,
+  wo_entropy = wo_entropy
+)
+
+# Perform LOF outlier analysis
+lof_values <- lof(labeled_points[, c("agreement", "wo_entropy")], minPts = 5)
+
+# Add LOF values to the data frame
+labeled_points$lof <- lof_values
+
+# Define a threshold for identifying outliers (e.g., LOF > 1.5)
+outlier_threshold <- 1.5
+labeled_points$outlier <- labeled_points$lof > outlier_threshold
+
+# Create the plot
+ggplot(labeled_points, aes(x = agreement, y = wo_entropy, label = language, color = outlier)) +
+  geom_point(size = 3) + # Points
+  geom_text_repel(size = 3.5, box.padding = 0.2, point.padding = 0.2, max.overlaps = Inf) + # Labels with repulsion
+  labs(x = "Agreement Rate",
+       y = "Word Order Entropy") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    axis.line = element_line(color = "black"), # Add axis lines
+    axis.ticks = element_line(color = "black"), # Add axis ticks
+    panel.grid.major = element_blank(), # Remove major gridlines
+    panel.grid.minor = element_blank()
+  ) + # Remove minor gridlines
+  scale_x_continuous(limits = c(0, 1)) +  # Set x-axis limits from 0 to 1
+  scale_y_continuous(limits = c(0, 1)) +  # Set y-axis limits from 0 to 1
+  scale_color_manual(values = c("FALSE" = "blue", "TRUE" = "red"), guide = FALSE) # Color points based on outlier status
+```
+
+## Linear Mixed Effect Model
+
+```{r}
+install.packages("lme4")
+#install.packages("simr")
+library(lme4)
+#library(simr)
+
+# Create data frame
+data <- data.frame(
+  agr = c(0.0262, 0.6325, 0.3984, 0.3641, 0, 0, 0, 0.3833, 0.6078, 0.6424, 0.1606, 0.1083, 0.0011, 0.0092, 0.2704, 0.4408, 0),
+  wo = c(0.0784, 0.1230, 0.3036, 0.6232, 0.1861, 0.1840, 0.1926, 0.0308, 0.0969, 0.0922, 0.9138, 0.7023, 0.9154, 0.4330, 0.7819, 0.3698, 0.0114),
+  Genus = c("Germanic", "Iranian", "Malayo-Polynesian", "Boran", 
+            "Tibeto-Burman", "West Bomberai", "Sinitic", "Oceanic", "Oceanic", 
+            "Iranian", "Dargwic", "Malayo-Polynesian", "Lezgic", "Oceanic", 
+            "Malayo-Polynesian", "Taulil-Butam", "Oceanic")
+)
+model <- lmer(wo ~ agr + (1 | Genus), data = data)
+
+summary(model)
+
+library(ggplot2)
+
+# Predicted values from the model
+data$predicted <- predict(model)
+
+# Create a new data frame for fixed effects predictions
+fixed_effects_data <- data.frame(agr = seq(min(data$agr), max(data$agr), length.out = 100))
+fixed_effects_data$predicted <- predict(model, newdata = fixed_effects_data, re.form = NA)
+
+# Plot the data and the overall fixed effects prediction line
+ggplot(data, aes(x = agr, y = wo, color = Genus)) +
+  geom_point() +
+  geom_line(data = fixed_effects_data, aes(x = agr, y = predicted), linetype = "dashed", color = "black") +
+  labs(x = "Agreement Rate",
+       y = "Word Order Entropy") +
+  scale_color_manual(values = c("Germanic" = "blue", "Iranian" = "red", "Malayo-Polynesian" = "green", "Boran" = "orange", "Tibeto-Burman" = "purple", "West Bomberai" = "yellow", "Sinitic" = "magenta", "Oceanic" = "cyan", "Dargwic" = "gray", "Lezgic" = "brown", "Teop" = "pink", "Taulil-Butam" = "darkgreen")) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),  # Remove grid
+        axis.line = element_line(color = "black"),  # Set axis lines to black
+        axis.text = element_text(size = 12),  # Set axis text size
+        axis.title = element_text(size = 14),  # Set axis title size
+        axis.ticks.length = unit(0.2, "cm")) +  # Set length of ticks
+  scale_x_continuous(breaks = seq(0, 1, by = 0.2), labels = seq(0, 1, by = 0.2)) +  # Set x-axis ticks and labels every 0.2 units
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2), labels = seq(0, 1, by = 0.2)) +   # Set y-axis
+  expand_limits(x = c(0, 1), y = c(0, 1)) + # Set x and y axis limits to range from 0 to 1
+  geom_hline(yintercept = seq(0, 1, by = 0.2), color = "grey", linetype = "dotted") +  # Add horizontal lines
+  geom_vline(xintercept = seq(0, 1, by = 0.2), color = "grey", linetype = "dotted") +  # Add vertical lines
+  coord_cartesian(ylim = c(0, 1))  # Set the visible y-axis limits
+
+```
+
+#### Perform Power Analysis
+
+```{r}
+
+# Create data frame
+data <- data.frame(
+  agr = c(0.0262, 0.6325, 0.3984, 0.3641, 0, 0, 0, 0.3833, 0.6078, 0.6424, 0.1606, 0.1083, 0.0011, 0.0092, 0.2704, 0.4408, 0),
+  wo = c(0.0784, 0.1230, 0.3036, 0.6232, 0.1861, 0.1840, 0.1926, 0.0308, 0.0969, 0.0922, 0.9138, 0.7023, 0.9154, 0.4330, 0.7819, 0.3698, 0.0114),
+  Genus = c("Germanic", "Iranian", "Malayo-Polynesian", "Boran", 
+            "Tibeto-Burman", "West Bomberai", "Sinitic", "Oceanic", "Oceanic", 
+            "Iranian", "Dargwic", "Malayo-Polynesian", "Lezgic", "Oceanic", 
+            "Malayo-Polynesian", "Taulil-Butam", "Oceanic")
+)
+model <- lmer(wo ~ agr + (1 | Genus), data = data)
+
+fixef(model)["agr"] <- -0.3217
+
+power_analysis <- powerSim(model, nsim = 100)  # Run 100 simulations
+
+# Summary of the power analysis
+print(power_analysis)
+```
+
+#### Spearman Rankorder Correlation
+
+```{r}
+
+install.packages("corrgram")
+
+# Define the genera
+genera <- c("Germanic", "Iranian", "Malayo-Polynesian", "Boran", "Greek", 
+            "Tibeto-Burman", "West Bomberai", "Sinitic", "Oceanic", "Oceanic", 
+            "Iranian", "Dargwic", "Malayo-Polynesian", "Lezgic", "Oceanic", 
+            "Malayo-Polynesian", "Taulil-Butam", "Oceanic")
+
+# Create the data frame
+test_entropy <- data.frame(
+  nomS_V = unlist(entropyS_values),
+  nomA_V = unlist(entropyA_values),
+  nomP_V = unlist(entropyP_values),
+  pronS_V = unlist(entropyS_values_pron),
+  pronA_V = unlist(entropyA_values_pron),
+  pronP_V = unlist(entropyP_values_pron),
+  Genus = genera
+)
+test_entropy
+
+library(corrgram)
+corrgram(test_entropy, cor.method  = 'spearman', order = T)
+```
+
+#### Calculating P-Value
+
+```{r}
+# Given t-value and degrees of freedom
+t_value <- -1.14
+degrees_of_freedom <- 17 - 2 
+
+# Calculate p-value using a t-distribution
+p_value <- 2 * pt(abs(t_value), df = degrees_of_freedom, lower.tail = FALSE)
+print (p_value)
+```
